@@ -1,4 +1,8 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
@@ -38,6 +42,38 @@ export class AuthService {
       access_token: accessToken,
       user: { email: user.email, name: user.name, role: user.role },
     };
+  }
+
+  // Cambio de la contraseña propia. Rota tokenVersion (cierra las demás
+  // sesiones) y devuelve un token nuevo para no expulsar la sesión actual.
+  async changePassword(
+    userId: string,
+    currentPassword: string,
+    newPassword: string,
+  ) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new NotFoundException('Usuario no encontrado');
+    if (!bcrypt.compareSync(currentPassword, user.password)) {
+      throw new UnauthorizedException('La contraseña actual es incorrecta');
+    }
+
+    const updated = await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        password: bcrypt.hashSync(newPassword, 10),
+        tokenVersion: { increment: 1 },
+      },
+    });
+
+    const accessToken = await this.jwtService.signAsync({
+      sub: updated.id,
+      email: updated.email,
+      name: updated.name,
+      role: updated.role,
+      tokenVersion: updated.tokenVersion,
+    });
+
+    return { changed: true, access_token: accessToken };
   }
 
   // Cierre de sesión real: incrementa tokenVersion → revoca todos los JWT del admin.

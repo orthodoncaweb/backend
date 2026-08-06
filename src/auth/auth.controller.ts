@@ -1,6 +1,17 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Post, Req, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Patch,
+  Post,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
+import { ChangeOwnPasswordDto } from '../users/dto/user.dto';
 import { JwtAuthGuard } from './jwt-auth.guard';
 
 @Controller('auth')
@@ -18,6 +29,21 @@ export class AuthController {
   @Get('profile')
   profile(@Req() req: { user: unknown }) {
     return req.user;
+  }
+
+  // PATCH /api/auth/password — cambia la contraseña propia.
+  @UseGuards(JwtAuthGuard)
+  @Patch('password')
+  @HttpCode(HttpStatus.OK)
+  changePassword(
+    @Req() req: { user: { id: string } },
+    @Body() dto: ChangeOwnPasswordDto,
+  ) {
+    return this.authService.changePassword(
+      req.user.id,
+      dto.currentPassword,
+      dto.newPassword,
+    );
   }
 
   // POST /api/auth/logout — cierre de sesión real (revoca los JWT del admin).
