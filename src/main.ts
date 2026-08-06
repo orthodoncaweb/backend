@@ -73,7 +73,9 @@ async function bootstrap() {
   app.enableCors({ origin: corsOrigins, credentials: true });
 
   const port = config.get<number>('PORT') ?? 4000;
-  await app.listen(port);
-  console.log(`🚀 Backend escuchando en http://localhost:${port}/api`);
+  // Escucha en '::' (IPv6 dual-stack: acepta también IPv4). Necesario para la
+  // red privada de Railway (backend.railway.internal) y compatible en local.
+  await app.listen(port, '::');
+  console.log(`🚀 Backend escuchando en el puerto ${port} (/api)`);
 }
 bootstrap();
