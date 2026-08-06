@@ -1,0 +1,274 @@
+// Prisma schema — Orthodonca
+// Documentación: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  // Conexión pooled (PgBouncer) para la app en runtime.
+  url       = env("DATABASE_URL")
+  // Conexión directa (sin -pooler) para migraciones.
+  directUrl = env("DIRECT_URL")
+}
+
+enum Role {
+  ADMIN
+  STAFF
+}
+
+/// Personal administrativo / usuarios del panel.
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  name      String
+  role      Role     @default(ADMIN)
+  // Se incrementa al cerrar sesión o cambiar contraseña: invalida los JWT viejos.
+  tokenVersion Int    @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("users")
+}
+
+/// Categorías de productos (se muestran en "Nuestras Categorías").
+model Category {
+  id            String        @id @default(cuid())
+  name          String
+  slug          String        @unique
+  imageUrl      String?
+  order         Int           @default(0)
+  subcategories Subcategory[]
+  products      Product[]
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@map("categories")
+}
+
+/// Subcategorías que pertenecen a una categoría.
+model Subcategory {
+  id         String    @id @default(cuid())
+  name       String
+  slug       String
+  imageUrl   String?
+  order      Int       @default(0)
+  categoryId String
+  category   Category  @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  products   Product[]
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@unique([categoryId, slug])
+  @@map("subcategories")
+}
+
+/// Productos de la tienda.
+model Product {
+  id            String           @id @default(cuid())
+  name          String
+  sku           String           @unique
+  description   String?
+  price         Decimal          @default(0) @db.Decimal(12, 2)
+  images        String[]         @default([])
+  stock         Int              @default(0)
+  hasVariants   Boolean          @default(false)
+  // Definición de atributos para el selector, ej.
+  // [{ "name": "Slot", "values": [".018\"", ".022\""] }, ...]
+  attributes    Json?
+  // ID externo (p. ej. WooCommerce) para importaciones idempotentes.
+  externalId    String?
+  variants      ProductVariant[]
+  categoryId    String
+  category      Category         @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  subcategoryId String?
+  subcategory   Subcategory?     @relation(fields: [subcategoryId], references: [id], onDelete: SetNull)
+  favorites     Favorite[]
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  @@index([externalId])
+  @@index([categoryId])
+  @@index([subcategoryId])
+  @@index([createdAt])
+  @@map("products")
+}
+
+/// Variante de un producto (combinación de atributos con su propio precio/stock).
+model ProductVariant {
+  id         String      @id @default(cuid())
+  productId  String
+  product    Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
+  sku        String?
+  // Etiqueta para mostrar, ej. "Slot: .022\" · Arcada: Superior"
+  label      String
+  // Selección de atributos, ej. { "Slot": ".022\"", "Arcada": "Superior" }
+  options    Json
+  price      Decimal     @db.Decimal(12, 2)
+  stock      Int         @default(0)
+  image      String?
+  orderItems OrderItem[]
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  @@index([productId])
+  @@map("product_variants")
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  FAILED
+  CANCELED
+}
+
+enum FulfillmentStatus {
+  RECIBIDO
+  EN_PREPARACION
+  ENVIADO
+}
+
+/// Órdenes de compra.
+model Order {
+  id                String            @id @default(cuid())
+  status            OrderStatus       @default(PENDING)
+  fulfillmentStatus FulfillmentStatus @default(RECIBIDO)
+  total             Decimal           @db.Decimal(12, 2)
+  currency        String      @default("usd")
+  // Tasa USD→VES usada al crear la orden (solo órdenes en Bs). Permite
+  // normalizar a USD con la tasa histórica, no la actual, en dashboard/reportes.
+  exchangeRateAtCreation Decimal? @db.Decimal(14, 4)
+  paymentMethod   String?
+  stripeSessionId String?     @unique
+  customerEmail   String?
+  customerId      String?
+  customer        Customer?   @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  items           OrderItem[]
+  // Datos de envío
+  shippingName       String?
+  shippingPhone      String?
+  shippingIdDocument String?
+  shippingAddress    String?
+  shippingCity       String?
+  shippingNotes      String?
+  // Datos de facturación
+  billingAddress     String?
+  billingCity        String?
+  billingState       String?
+  // Gestión interna
+  trackingNumber  String?
+  adminNotes      String?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  @@index([customerId])
+  @@index([createdAt])
+  // Compuesto para el dashboard (filtra status + rango de createdAt).
+  @@index([status, createdAt])
+  @@map("orders")
+}
+
+/// Ítems de una orden (snapshot del producto al momento de la compra).
+model OrderItem {
+  id           String          @id @default(cuid())
+  orderId      String
+  order        Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId    String?
+  variantId    String?
+  variant      ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  variantLabel String?
+  name         String
+  image        String?
+  unitPrice    Decimal         @db.Decimal(12, 2)
+  quantity     Int
+
+  @@index([orderId])
+  @@index([variantId])
+  @@map("order_items")
+}
+
+/// Configuración clave-valor de la aplicación.
+model Setting {
+  key   String @id
+  value String
+
+  @@map("settings")
+}
+
+/// Historial diario de tasas de cambio.
+model ExchangeRateHistory {
+  id             String   @id @default(cuid())
+  day            String   @unique // "YYYY-MM-DD"
+  usdVesOficial  Decimal  @db.Decimal(14, 4)
+  usdVesParalelo Decimal? @db.Decimal(14, 4)
+  eurUsd         Decimal? @db.Decimal(14, 6)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("exchange_rate_history")
+}
+
+/// Clientes de la tienda.
+model Customer {
+  id                  String     @id @default(cuid())
+  name                String
+  lastName            String
+  specialty           String?
+  phone               String?
+  clinicName          String?
+  idDocument          String?
+  address             String?
+  city                String?
+  // Dirección de facturación
+  billingAddress      String?
+  billingCity         String?
+  billingState        String?
+  // Dirección de envío
+  shippingAddress     String?
+  shippingCity        String?
+  shippingState       String?
+  email               String     @unique
+  password            String
+  // Verificación de correo (el enlace usa un JWT con propósito 'verify-email').
+  emailVerified       Boolean    @default(false)
+  // Se incrementa al cerrar sesión o cambiar contraseña: invalida los JWT viejos.
+  tokenVersion        Int        @default(0)
+  resetToken          String?
+  resetTokenExpiresAt DateTime?
+  orders              Order[]
+  favorites           Favorite[]
+  createdAt           DateTime   @default(now())
+  updatedAt           DateTime   @updatedAt
+
+  @@map("customers")
+}
+
+/// Favoritos / lista de deseos de un cliente.
+model Favorite {
+  id         String   @id @default(cuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  productId  String
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@unique([customerId, productId])
+  @@map("favorites")
+}
+
+/// Entradas del blog.
+model Post {
+  id         String   @id @default(cuid())
+  title      String
+  slug       String   @unique
+  excerpt    String?
+  content    String
+  coverImage String?
+  published  Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@map("posts")
+}
