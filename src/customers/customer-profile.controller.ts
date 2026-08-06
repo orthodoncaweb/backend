@@ -1,4 +1,5 @@
 import { Body, Controller, Get, HttpCode, HttpStatus, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { CustomersService } from './customers.service';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
@@ -14,6 +15,15 @@ export class CustomerProfileController {
   @HttpCode(HttpStatus.OK)
   logout(@Req() req: { user: { id: string } }) {
     return this.customersService.logout(req.user.id);
+  }
+
+  // POST /api/me/resend-verification — reenvía el correo de verificación.
+  // Limitado a 3 envíos cada 10 minutos para no permitir abuso del buzón.
+  @Throttle({ default: { limit: 3, ttl: 600000 } })
+  @Post('resend-verification')
+  @HttpCode(HttpStatus.OK)
+  resendVerification(@Req() req: { user: { id: string } }) {
+    return this.customersService.resendVerification(req.user.id);
   }
 
   // GET /api/me/profile

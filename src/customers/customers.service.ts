@@ -77,21 +77,38 @@ export class CustomersService {
     });
 
     // Correo de verificación (bienvenida + enlace). No rompe el registro si falla.
+    await this.dispatchVerifyEmail(customer.id, customer.email, customer.name);
+
+    const accessToken = await this.signToken(customer);
+    return { access_token: accessToken, customer: this.toPublic(customer) };
+  }
+
+  // Genera el enlace de verificación y despacha el correo. Nunca lanza: el
+  // envío de correo no debe afectar al registro ni al reenvío.
+  private async dispatchVerifyEmail(id: string, email: string, name: string) {
     try {
       const verifyToken = await this.jwtService.signAsync(
-        { sub: customer.id, purpose: 'verify-email' },
+        { sub: id, purpose: 'verify-email' },
         { expiresIn: '1d' },
       );
       const frontendUrl =
         this.config.get<string>('FRONTEND_URL') || 'http://localhost:3000';
       const link = `${frontendUrl}/verificar?token=${verifyToken}`;
-      await this.mail.sendVerifyEmail(customer.email, customer.name, link);
+      await this.mail.sendVerifyEmail(email, name, link);
     } catch {
-      // Ignorado: el envío de correo no debe afectar el registro.
+      // Ignorado a propósito.
     }
+  }
 
-    const accessToken = await this.signToken(customer);
-    return { access_token: accessToken, customer: this.toPublic(customer) };
+  // Reenvía el correo de verificación al cliente autenticado.
+  async resendVerification(id: string) {
+    const customer = await this.prisma.customer.findUnique({ where: { id } });
+    if (!customer) throw new NotFoundException('Cliente no encontrado');
+    if (customer.emailVerified) {
+      return { sent: false, alreadyVerified: true };
+    }
+    await this.dispatchVerifyEmail(customer.id, customer.email, customer.name);
+    return { sent: true, alreadyVerified: false };
   }
 
   // Verifica el correo del cliente a partir del token JWT del enlace.
@@ -263,6 +280,7 @@ export class CustomersService {
       shippingCity: c.shippingCity,
       shippingState: c.shippingState,
       email: c.email,
+      emailVerified: c.emailVerified,
       createdAt: c.createdAt,
     };
   }
