@@ -23,12 +23,18 @@ interface AdminOrderInfo extends MailOrder {
   paymentMethod?: string;
 }
 
+// Endpoint de la API transaccional de Brevo (HTTPS: no depende de puertos SMTP).
+const BREVO_API_URL = 'https://api.brevo.com/v3/smtp/email';
+
 @Injectable()
 export class MailService {
   private readonly logger = new Logger(MailService.name);
   private readonly transporter: nodemailer.Transporter | null = null;
+  /** API key de Brevo. Si existe, se envía por HTTPS en vez de SMTP. */
+  private readonly apiKey: string | null;
   private readonly isConfigured: boolean;
   private readonly from: string;
+  private readonly sender: { name?: string; email: string };
   private warnedOnce = false;
 
   constructor(private readonly config: ConfigService) {
@@ -41,16 +47,20 @@ export class MailService {
       'true';
     this.from =
       this.config.get<string>('SMTP_FROM') ?? 'Orthodonca <no-reply@orthodonca.com>';
+    this.sender = this.parseFrom(this.from);
 
-    // Requiere al menos host y user para considerarse configurado
-    this.isConfigured = Boolean(host && user);
+    this.apiKey = this.config.get<string>('BREVO_API_KEY')?.trim() || null;
 
-    if (this.isConfigured) {
+    // Preferimos la API HTTP (funciona en hostings que bloquean SMTP, como
+    // Railway en planes Hobby). Si no hay API key, se usa SMTP.
+    this.isConfigured = Boolean(this.apiKey) || Boolean(host && user);
+
+    if (!this.apiKey && host && user) {
       this.transporter = nodemailer.createTransport({
         host,
         port,
         secure,
-        auth: user ? { user, pass } : undefined,
+        auth: { user, pass },
         // Timeouts: si el servidor SMTP no responde (p. ej. el proveedor de
         // hosting restringe el puerto), se aborta en segundos en vez de dejar
         // la conexión colgada indefinidamente.
@@ -59,37 +69,84 @@ export class MailService {
         socketTimeout: 20000,
       });
     }
+
+    if (this.apiKey) {
+      this.logger.log('Correo: usando la API HTTP de Brevo.');
+    }
+  }
+
+  /** "Orthodonca <no-reply@orthodonca.com>" → { name, email } */
+  private parseFrom(from: string): { name?: string; email: string } {
+    const match = /^\s*(.*?)\s*<([^>]+)>\s*$/.exec(from);
+    if (match) {
+      const name = match[1].replace(/^"|"$/g, '').trim();
+      return name ? { name, email: match[2].trim() } : { email: match[2].trim() };
+    }
+    return { email: from.trim() };
   }
 
   // Avisa una sola vez que el correo está deshabilitado
   private warnNotConfigured(): void {
     if (!this.warnedOnce) {
       this.logger.warn(
-        'SMTP no configurado (falta SMTP_HOST/SMTP_USER): los correos están deshabilitados (no-op).',
+        'Correo no configurado (falta BREVO_API_KEY o SMTP_HOST/SMTP_USER): los correos están deshabilitados (no-op).',
       );
       this.warnedOnce = true;
     }
   }
 
+  /** Envío por la API HTTP de Brevo. Lanza si la respuesta no es OK. */
+  private async sendViaApi(
+    to: string,
+    subject: string,
+    html: string,
+  ): Promise<void> {
+    const res = await fetch(BREVO_API_URL, {
+      method: 'POST',
+      headers: {
+        'api-key': this.apiKey as string,
+        'content-type': 'application/json',
+        accept: 'application/json',
+      },
+      body: JSON.stringify({
+        sender: this.sender,
+        to: [{ email: to }],
+        subject,
+        htmlContent: html,
+      }),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      throw new Error(`Brevo API respondió ${res.status}: ${detail.slice(0, 300)}`);
+    }
+  }
+
   // Envío central: NO bloquea a quien lo llama y nunca lanza.
   // El correo se despacha en segundo plano para que la respuesta HTTP (registro,
-  // pedido, etc.) no quede esperando al servidor SMTP. Si falla, solo se registra.
+  // pedido, etc.) no quede esperando al proveedor de correo. Si falla, se registra.
   private async send(
     to: string,
     subject: string,
     html: string,
   ): Promise<void> {
-    if (!this.isConfigured || !this.transporter) {
+    if (!this.isConfigured) {
       this.warnNotConfigured();
       return;
     }
-    this.transporter
-      .sendMail({
-        from: this.from,
-        to,
-        subject,
-        html,
-      })
+
+    const dispatch = this.apiKey
+      ? this.sendViaApi(to, subject, html)
+      : this.transporter
+        ? this.transporter.sendMail({ from: this.from, to, subject, html })
+        : null;
+
+    if (!dispatch) {
+      this.warnNotConfigured();
+      return;
+    }
+
+    dispatch
       .then(() => {
         this.logger.log(`Correo enviado: "${subject}" → ${to}`);
       })

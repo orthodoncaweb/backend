@@ -119,4 +119,54 @@ describe('MailService', () => {
       ).resolves.toBeUndefined();
     });
   });
+
+  // La API HTTP tiene prioridad sobre SMTP: funciona en hostings que bloquean
+  // los puertos SMTP (Railway Hobby).
+  describe('API HTTP de Brevo (BREVO_API_KEY)', () => {
+    const apiValues = { ...smtpValues, BREVO_API_KEY: 'xkeysib-test' };
+    let fetchMock: jest.Mock;
+
+    beforeEach(() => {
+      fetchMock = jest.fn().mockResolvedValue({ ok: true, status: 201 });
+      global.fetch = fetchMock as unknown as typeof fetch;
+    });
+
+    it('no usa SMTP: no crea transporter aunque haya credenciales SMTP', () => {
+      new MailService(makeConfig(apiValues) as any);
+      expect(nodemailer.createTransport).not.toHaveBeenCalled();
+    });
+
+    it('envía por HTTPS a la API con la api-key y el cuerpo esperado', async () => {
+      const service = new MailService(makeConfig(apiValues) as any);
+
+      await service.sendWelcome('cliente@test', 'Ana');
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchMock.mock.calls[0];
+      expect(url).toBe('https://api.brevo.com/v3/smtp/email');
+      expect(init.method).toBe('POST');
+      expect(init.headers['api-key']).toBe('xkeysib-test');
+
+      const body = JSON.parse(init.body);
+      // "Orthodonca <no-reply@test>" se separa en nombre y correo.
+      expect(body.sender).toEqual({ name: 'Orthodonca', email: 'no-reply@test' });
+      expect(body.to).toEqual([{ email: 'cliente@test' }]);
+      expect(body.subject).toBe('Bienvenido a Orthodonca');
+      expect(body.htmlContent).toContain('Ana');
+      expect(sendMail).not.toHaveBeenCalled();
+    });
+
+    it('no lanza si la API responde error', async () => {
+      fetchMock.mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        text: () => Promise.resolve('unauthorized'),
+      });
+      const service = new MailService(makeConfig(apiValues) as any);
+
+      await expect(
+        service.sendPasswordReset('cliente@test', 'https://app/reset?token=x'),
+      ).resolves.toBeUndefined();
+    });
+  });
 });
