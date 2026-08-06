@@ -51,6 +51,12 @@ export class MailService {
         port,
         secure,
         auth: user ? { user, pass } : undefined,
+        // Timeouts: si el servidor SMTP no responde (p. ej. el proveedor de
+        // hosting restringe el puerto), se aborta en segundos en vez de dejar
+        // la conexión colgada indefinidamente.
+        connectionTimeout: 10000,
+        greetingTimeout: 10000,
+        socketTimeout: 20000,
       });
     }
   }
@@ -65,7 +71,9 @@ export class MailService {
     }
   }
 
-  // Envío central con try/catch; nunca lanza
+  // Envío central: NO bloquea a quien lo llama y nunca lanza.
+  // El correo se despacha en segundo plano para que la respuesta HTTP (registro,
+  // pedido, etc.) no quede esperando al servidor SMTP. Si falla, solo se registra.
   private async send(
     to: string,
     subject: string,
@@ -75,20 +83,23 @@ export class MailService {
       this.warnNotConfigured();
       return;
     }
-    try {
-      await this.transporter.sendMail({
+    this.transporter
+      .sendMail({
         from: this.from,
         to,
         subject,
         html,
+      })
+      .then(() => {
+        this.logger.log(`Correo enviado: "${subject}" → ${to}`);
+      })
+      .catch((err: unknown) => {
+        this.logger.error(
+          `Error al enviar correo "${subject}" a ${to}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
       });
-    } catch (err) {
-      this.logger.error(
-        `Error al enviar correo "${subject}" a ${to}: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
-    }
   }
 
   // Envoltura HTML con marca Orthodonca
