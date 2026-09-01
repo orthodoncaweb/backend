@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
+import { SettingsService } from '../settings/settings.service';
 
 export type RateType = 'USD' | 'EUR';
 
@@ -18,9 +19,15 @@ export interface RateInfo {
   rate: number; // Bs. por unidad de la moneda base
   usdVes: number; // tasa USD->VES (oficial)
   eurUsd?: number; // tasa EUR->USD (solo si base = EUR)
+  bsFactor: number; // recargo aplicado al pagar en bolívares (1 = sin recargo)
+  bsRate: number; // rate * bsFactor: Bs. efectivos por unidad de la moneda base
   source: string;
   updatedAt: string;
 }
+
+// Info de la tasa tal como se cachea: sin el factor, que se lee siempre fresco
+// para que un cambio en el panel se refleje de inmediato.
+type RawRateInfo = Omit<RateInfo, 'bsFactor' | 'bsRate'>;
 
 const SETTING_KEY = 'exchange_rate_type';
 const DOLAR_API = 'https://ve.dolarapi.com/v1/dolares';
@@ -30,9 +37,12 @@ const CACHE_MS = 30 * 60 * 1000; // 30 minutos
 @Injectable()
 export class ExchangeRateService implements OnModuleInit {
   private readonly logger = new Logger(ExchangeRateService.name);
-  private cache?: RateInfo & { fetchedAt: number };
+  private cache?: RawRateInfo & { fetchedAt: number };
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly settings: SettingsService,
+  ) {}
 
   // Registra la tasa del día al iniciar el servidor.
   async onModuleInit() {
@@ -86,7 +96,7 @@ export class ExchangeRateService implements OnModuleInit {
     const type = await this.getType();
 
     if (this.cache && this.cache.type === type && Date.now() - this.cache.fetchedAt < CACHE_MS) {
-      return this.strip(this.cache);
+      return this.withFactor(this.cache);
     }
 
     try {
@@ -101,7 +111,7 @@ export class ExchangeRateService implements OnModuleInit {
         baseCurrency = 'EUR';
       }
 
-      const info: RateInfo & { fetchedAt: number } = {
+      const info: RawRateInfo & { fetchedAt: number } = {
         type,
         baseCurrency,
         baseSymbol: baseCurrency === 'EUR' ? '€' : '$',
@@ -113,10 +123,10 @@ export class ExchangeRateService implements OnModuleInit {
         fetchedAt: Date.now(),
       };
       this.cache = info;
-      return this.strip(info);
+      return this.withFactor(info);
     } catch (err) {
       this.logger.error(`Error al obtener la tasa: ${(err as Error).message}`);
-      if (this.cache) return this.strip(this.cache);
+      if (this.cache) return this.withFactor(this.cache);
       throw new ServiceUnavailableException('No se pudo obtener la tasa de cambio');
     }
   }
@@ -174,9 +184,11 @@ export class ExchangeRateService implements OnModuleInit {
     }));
   }
 
-  private strip(info: RateInfo & { fetchedAt?: number }): RateInfo {
+  // Quita el sello de caché y añade el factor de conversión a bolívares.
+  private async withFactor(info: RawRateInfo & { fetchedAt?: number }): Promise<RateInfo> {
     const { fetchedAt: _omit, ...rest } = info;
     void _omit;
-    return rest;
+    const bsFactor = await this.settings.getBsFactor();
+    return { ...rest, bsFactor, bsRate: Number((rest.rate * bsFactor).toFixed(4)) };
   }
 }

@@ -8,6 +8,7 @@ describe('ExchangeRateService', () => {
     setting: { findUnique: jest.Mock; upsert: jest.Mock };
     exchangeRateHistory: { upsert: jest.Mock; findMany: jest.Mock };
   };
+  let settings: { getBsFactor: jest.Mock };
 
   // Respuesta tipo dolarapi (lista con fuente oficial/paralelo).
   const dolarOk = [
@@ -27,7 +28,8 @@ describe('ExchangeRateService', () => {
         findMany: jest.fn(),
       },
     };
-    service = new ExchangeRateService(prisma as any);
+    settings = { getBsFactor: jest.fn().mockResolvedValue(1) };
+    service = new ExchangeRateService(prisma as any, settings as any);
     global.fetch = jest.fn() as any;
   });
 
@@ -44,6 +46,41 @@ describe('ExchangeRateService', () => {
     it('devuelve USD por defecto (setting ausente o distinto)', async () => {
       prisma.setting.findUnique.mockResolvedValue(null);
       expect(await service.getType()).toBe('USD');
+    });
+  });
+
+  describe('factor de conversión a bolívares', () => {
+    it('bsRate multiplica la tasa por el factor configurado', async () => {
+      prisma.setting.findUnique.mockResolvedValue({ value: 'USD' });
+      (global.fetch as jest.Mock).mockReturnValue(jsonResponse(dolarOk));
+      settings.getBsFactor.mockResolvedValue(1.176);
+
+      const info = await service.getRate();
+
+      expect(info.rate).toBe(40); // tasa oficial, sin tocar
+      expect(info.bsFactor).toBe(1.176);
+      expect(info.bsRate).toBe(47.04); // 40 × 1.176
+    });
+
+    it('con factor 1 el bsRate es igual a la tasa', async () => {
+      prisma.setting.findUnique.mockResolvedValue({ value: 'USD' });
+      (global.fetch as jest.Mock).mockReturnValue(jsonResponse(dolarOk));
+
+      const info = await service.getRate();
+
+      expect(info.bsFactor).toBe(1);
+      expect(info.bsRate).toBe(info.rate);
+    });
+
+    it('relee el factor aunque la tasa venga de caché', async () => {
+      prisma.setting.findUnique.mockResolvedValue({ value: 'USD' });
+      (global.fetch as jest.Mock).mockReturnValue(jsonResponse(dolarOk));
+
+      await service.getRate(); // llena la caché
+      settings.getBsFactor.mockResolvedValue(2);
+      const info = await service.getRate();
+
+      expect(info.bsRate).toBe(80);
     });
   });
 

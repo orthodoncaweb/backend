@@ -113,7 +113,7 @@ describe('PaymentsService - createWhatsappOrder', () => {
 
   it('lanza el mismo error si getRate resuelve con una tasa no positiva', async () => {
     prisma.product.findMany.mockResolvedValue([simpleProduct]);
-    exchangeRate.getRate.mockResolvedValue({ rate: 0 });
+    exchangeRate.getRate.mockResolvedValue({ rate: 40, bsRate: 0 });
 
     const dto = {
       items: [{ productId: 'prod-simple', quantity: 1 }],

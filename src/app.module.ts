@@ -22,6 +22,7 @@ import { ReportsModule } from './reports/reports.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { PasswordResetModule } from './password-reset/password-reset.module';
 import { SettingsModule } from './settings/settings.module';
+import { RevalidationModule } from './revalidation/revalidation.module';
 
 @Module({
   imports: [
@@ -34,6 +35,7 @@ import { SettingsModule } from './settings/settings.module';
     // Limita la tasa de peticiones: 120 por minuto por IP.
     ThrottlerModule.forRoot([{ ttl: 60000, limit: 120 }]),
     PrismaModule,
+    RevalidationModule,
     AuthModule,
     UsersModule,
     CustomersModule,

@@ -10,6 +10,7 @@ function createPrismaMock() {
       findMany: jest.fn(),
       count: jest.fn(),
       create: jest.fn(),
+      delete: jest.fn(),
     },
     category: {
       findUnique: jest.fn(),
@@ -44,10 +45,12 @@ function buildProduct(overrides: Partial<any> = {}): any {
 describe('ProductsService', () => {
   let service: ProductsService;
   let prisma: ReturnType<typeof createPrismaMock>;
+  let revalidation: { revalidateProduct: jest.Mock };
 
   beforeEach(() => {
     prisma = createPrismaMock();
-    service = new ProductsService(prisma as any);
+    revalidation = { revalidateProduct: jest.fn() };
+    service = new ProductsService(prisma as any, revalidation as any);
   });
 
   // ---------------------------------------------------------------------------
@@ -368,6 +371,27 @@ describe('ProductsService', () => {
       const dto: any = { name: 'P', sku: 'SKU', categoryId: 'nope', price: 10 };
       await expect(service.create(dto)).rejects.toThrow(BadRequestException);
       expect(prisma.product.create).not.toHaveBeenCalled();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Purga de la caché del frontend
+  // ---------------------------------------------------------------------------
+  describe('revalidación del frontend', () => {
+    it('remove purga la caché del producto borrado', async () => {
+      prisma.product.findUnique.mockResolvedValue(buildProduct());
+      prisma.product.delete.mockResolvedValue(undefined);
+
+      await service.remove('p1');
+
+      expect(revalidation.revalidateProduct).toHaveBeenCalledWith('p1');
+    });
+
+    it('remove no purga nada si el producto no existe', async () => {
+      prisma.product.findUnique.mockResolvedValue(null);
+
+      await expect(service.remove('nope')).rejects.toBeInstanceOf(NotFoundException);
+      expect(revalidation.revalidateProduct).not.toHaveBeenCalled();
     });
   });
 });

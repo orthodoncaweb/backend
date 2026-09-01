@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { RevalidationService } from '../revalidation/revalidation.service';
 import {
   CreateProductDto,
   ProductVariantDto,
@@ -32,7 +33,10 @@ type AnyProductRow = ProductWithRelations | ProductListRow;
 
 @Injectable()
 export class ProductsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly revalidation: RevalidationService,
+  ) {}
 
   // Precio efectivo: si tiene variantes cargadas -> mínimo ("desde"); si no -> price
   // del producto (que ya guarda ese mínimo, así las listas no necesitan las variantes).
@@ -242,6 +246,8 @@ export class ProductsService {
         },
         include: productInclude,
       });
+      // Purga la caché del frontend para que el producto aparezca de inmediato.
+      this.revalidation.revalidateProduct(product.id);
       return this.serialize(product);
     } catch (e) {
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
@@ -333,6 +339,8 @@ export class ProductsService {
         where: { id },
         include: productInclude,
       });
+      // Purga la caché del frontend: el cambio se ve sin esperar al TTL.
+      this.revalidation.revalidateProduct(id);
       return this.serialize(product as ProductWithRelations);
     } catch (e) {
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
@@ -346,6 +354,7 @@ export class ProductsService {
     const existing = await this.prisma.product.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Producto no encontrado');
     await this.prisma.product.delete({ where: { id } });
+    this.revalidation.revalidateProduct(id);
     return { deleted: true };
   }
 }

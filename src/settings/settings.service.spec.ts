@@ -72,4 +72,53 @@ describe('SettingsService', () => {
       expect(result).toEqual({ key: 'whatsapp_number', value: '+58 412-1234567' });
     });
   });
+  describe('factor de conversión a bolívares', () => {
+    it('getBsFactor devuelve 1 cuando no hay valor guardado', async () => {
+      prisma.setting.findUnique.mockResolvedValue(null);
+
+      expect(await service.getBsFactor()).toBe(1);
+      expect(prisma.setting.findUnique).toHaveBeenCalledWith({
+        where: { key: 'bs_conversion_factor' },
+      });
+    });
+
+    it('getBsFactor parsea el valor guardado', async () => {
+      prisma.setting.findUnique.mockResolvedValue({ value: '1.176' });
+      expect(await service.getBsFactor()).toBe(1.176);
+    });
+
+    it('getBsFactor cae en 1 si el valor es basura o no positivo', async () => {
+      prisma.setting.findUnique.mockResolvedValue({ value: 'abc' });
+      expect(await service.getBsFactor()).toBe(1);
+
+      prisma.setting.findUnique.mockResolvedValue({ value: '0' });
+      expect(await service.getBsFactor()).toBe(1);
+
+      prisma.setting.findUnique.mockResolvedValue({ value: '-2' });
+      expect(await service.getBsFactor()).toBe(1);
+    });
+
+    it('getBsFactor recorta valores fuera de rango', async () => {
+      prisma.setting.findUnique.mockResolvedValue({ value: '99' });
+      expect(await service.getBsFactor()).toBe(5);
+
+      prisma.setting.findUnique.mockResolvedValue({ value: '0.1' });
+      expect(await service.getBsFactor()).toBe(0.5);
+    });
+
+    it('setBsFactor guarda el valor recortado bajo bs_conversion_factor', async () => {
+      const saved = await service.setBsFactor(1.176);
+
+      expect(saved).toBe(1.176);
+      expect(prisma.setting.upsert).toHaveBeenCalledWith({
+        where: { key: 'bs_conversion_factor' },
+        update: { value: '1.176' },
+        create: { key: 'bs_conversion_factor', value: '1.176' },
+      });
+    });
+
+    it('setBsFactor recorta al máximo permitido', async () => {
+      expect(await service.setBsFactor(12)).toBe(5);
+    });
+  });
 });

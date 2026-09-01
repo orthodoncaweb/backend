@@ -129,13 +129,15 @@ export class PaymentsService {
     const isUsd = USD_WHATSAPP_METHODS.includes(method);
     const methodLabel = WHATSAPP_METHOD_LABELS[method] ?? 'Pago';
 
-    // Tasa de cambio: SOLO se necesita para los métodos en bolívares. Si la
+    // Tasa de cambio: SOLO se necesita para los métodos en bolívares. Se usa
+    // bsRate (tasa oficial x factor de conversión configurado en el panel) para
+    // que el monto cobrado coincida con el que ve el cliente en la tienda. Si la
     // fuente falla, NO usamos 1:1 silenciosamente (precios gravemente errados):
     // abortamos con un error claro en vez de registrar una orden mal cotizada.
     let rate = 1;
     if (!isUsd) {
       try {
-        rate = (await this.exchangeRate.getRate()).rate;
+        rate = (await this.exchangeRate.getRate()).bsRate;
       } catch {
         rate = 0;
       }
